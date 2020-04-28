@@ -1,0 +1,1678 @@
+---
+title: "casp3"
+output: html_notebook
+---
+
+
+```{r}
+#Import necessary libraries
+library(dplyr)
+library(plyr)
+library(reshape2)
+library(Biostrings)
+library(ggplot2)
+library(stringr)
+library(geofacet)
+library(ggplot2)
+library(plyr)
+library(scales)
+library(facetscales)
+library(stringr)
+library(reshape2)
+library(ggplot2)
+library(parallel)
+library(stringr)
+library(seqRFLP)
+library(DECIPHER)
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+library(dplyr)
+library(pracma)
+library(seqinr)
+library(ggseqlogo)
+library(Vennerable)
+library(limma)
+library(eulerr)
+library(facetscales)
+library(ShortRead)
+library(Biostrings)
+
+```
+
+
+convert fastaq file into table saved in csv file, group same sequences
+```{r}
+# change working directory in this chunk
+setwd("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/substrate_phage_manuscript/submission/script_repository/Lib10AA")
+
+#Read file names
+raw <- list.files(pattern="\\.fastq.gz$")
+
+######################
+##### PROCESSING #####
+######################
+
+#Primary for loop
+for (n in 1:length(raw)) {
+
+#Start timing
+start.time <- Sys.time()
+
+#Read in Fastq file
+cat(paste("Currently reading in",raw[n],"\n"))
+# write.table(t(c("File name",raw[n])), file = paste(strtrim(raw[n],13),"_","Processing.csv"), append=TRUE, row.names=FALSE, col.names=FALSE, sep=",")
+fq <- readFastq(raw[n])
+
+#Convert fastq file to sequences
+sequences <- sread(fq)
+cat(paste("There are",length(sequences),"reads in",raw[n],"\n"))
+# write.table(t(c("Total counts",length(sequences))), file = paste("processing_files/",strtrim(raw[n],13),"_","Processing.csv"), append=TRUE, row.names=FALSE, col.names=FALSE, sep=",")
+rm(fq)
+gc()
+#Tabulate the data
+tbl <- as.data.frame(table(sequences))
+cat(paste("Tabulation complete. There are", nrow(tbl),"unique sequences. That's", (nrow(tbl)/length(sequences))*100,"percent of the total reads.","\n"))
+# write.table(t(c("Unique counts",nrow(tbl))), file = paste("processing_files/",strtrim(raw[n],13),"_","Processing.csv"), append=TRUE, row.names=FALSE, col.names=FALSE, sep=",")
+#Clear the memory
+rm(sequences)
+gc()
+
+#Order by frequency and write to csv
+ord_tbl <- tbl[order(-tbl[,2]),]
+write.csv(ord_tbl,paste(strtrim(raw[n],13),".csv",sep=""))
+
+#Finishing time
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+# cat(paste("Processing",raw[n],"took",as.numeric(time.taken),"seconds.","\n"))
+# write.table(t(c("Processing time",time.taken)), file = paste("processing_files/",strtrim(raw[n],11),"_","Processing.csv"), append=TRUE, row.names=FALSE, col.names=FALSE, sep=",")
+# write.table("", file = paste("processing_files/",strtrim(raw[n],13),"_","Processing.csv"), row.names=FALSE, col.names=FALSE, sep=",", append=TRUE)
+
+#Clean-up (except raw)
+rm(tbl,ord_tbl)
+gc()
+
+#End the loop
+}
+
+######################
+##### REFERENCES #####
+######################
+
+#https://stackoverflow.com/questions/16566799/change-variable-name-in-for-loop-using-r
+#https://www.rdocumentation.org/packages/ShortRead/versions/1.30.0/topics/FastqFile-class
+#https://stackoverflow.com/questions/9107695/r-comment-out-block-of-code
+
+```
+
+data clean up
+```{r}
+# set up working directory in this chunk
+setwd("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/substrate_phage_manuscript/submission/script_repository/Lib10AA")
+
+
+#list names of all files
+file_name <- list.files(pattern = "\\.csv$")
+
+read <- matrix( ncol = 2) %>% as.data.frame()
+colnames(read) <- c("ID", "unique_sequence")
+
+
+for (i in 1:length(file_name)){
+  #load file
+  NT_seq<-read.csv(file_name[i])
+  #remove reading error
+  NT_seq <- NT_seq[!grepl(NT_seq$sequences, pattern="N"),]
+  #reverse complement the sequence
+  NT_seq$rev_NT <- reverseComplement(DNAStringSet(NT_seq$sequences))
+  # NexSeq, so the first two bp is redundant
+  NT_seq$rev_NT <- substr(NT_seq$rev_NT, 3, 50)
+  #translate
+  NT_seq$AA_seq<- Biostrings::translate(DNAStringSet(NT_seq$rev_NT))
+  #get the variable part
+  NT_seq$first_10<- substr(NT_seq$AA_seq, start=7, stop=16)
+  #remove any * 
+  NT_seq <-subset(NT_seq, grepl("X|[*]", NT_seq$AA_seq)==FALSE)
+  # only need AA, freq
+  NT_seq <- NT_seq[, c("AA_seq","Freq", "first_10")]
+  NT_seq <- NT_seq[grepl(NT_seq$AA_seq, pattern="^KIEWHE"), ]
+  #NT_seq <- NT_seq[NT_seq$Freq>=5,]
+  write.csv(NT_seq, paste0(substr(file_name[i], 11,13), ".csv"))
+  read[i,1] <- substr(file_name[i], 11, 13)
+  read[i,2] <- nrow(NT_seq)
+  rm(NT_seq)
+  gc()
+}
+
+#read_summary <-  matrix(read$reads, nrow = 3, byrow=T) %>% as.data.frame()
+#colnames(read_summary) <- c("1uM", "100nM", "10nM")
+#rownames(read_summary) <- c("R1", "R2", "R3")
+
+write.csv(read, "read_summary.csv")
+
+```
+
+
+Amino acid change compared to input library on differnt position
+```{r}
+
+file_name <- c("A02.csv", "B02.csv", "C02.csv")
+# load input library
+input <- read.csv("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/NGS/10AA-Set3 NGS data/Lib3_characterization/Lib10AA_input_AA_abundancy.csv")
+input <- input[, 2:21]%>% t() %>% as.data.frame()
+#creat a table for generating a heatmap
+heat.map <- matrix(ncol=4)
+colnames(heat.map) <- c("ID", "variable", "value", "sample")
+
+for (k in 1:length(file_name)){
+  trial <- read.csv(file_name[k])
+  trial$RPM <- trial$Freq/(sum(trial$Freq)/1000000)
+  #add a column of RPM
+  # write.csv(trial, file_name[k])
+  trial <- trial[trial$RPM>2, ]
+  #column name, and define the sequence
+  AA<-c("A", "C", "D", "E", "F", "G", "H","I",  "K", "L", "M", "N", "P", "Q", "R", "S", "T","V", "W", "Y")
+  # a summarized table
+  calculation<- matrix(nrow=10, ncol=20) %>%as.data.frame
+  colnames(calculation)<-AA
+  # summarized how many each AA in each position
+  for (i in 1:10) {
+   temp<-substr(trial$first_10, i, i)
+    uniqueaa<- temp %>%  unique() %>%data.frame(stringsAsFactors = F)
+    colnames(uniqueaa) <- "uniqueaa"
+    result<-apply(uniqueaa,1,function(x) str_count(temp, x["uniqueaa"]))
+    colnames(result) <- uniqueaa$uniqueaa
+    result<-result[, AA]
+   for (j in 1:20) {
+      calculation[i,j]<-sum(result[,j])
+    }
+}
+
+  calculation$total<-sum(calculation[, 1:20])/10
+  calculation_percentage<- calculation/calculation$total[1]*100
+
+  colnames(input) <- c( "AA1", "AA2", "AA3","AA4", "AA5","AA6","AA7", "AA8", "AA9", "AA10")
+  output <- calculation_percentage[, 1:20]%>%t()
+  colnames(output) <- c( "AA1", "AA2", "AA3","AA4", "AA5","AA6","AA7", "AA8", "AA9", "AA10")
+  Zscore <- input
+  for (i in 1:10){
+   for (j in 1: 20) {
+      Zscore[j,i]<- (output[j,i]-input[j,i])/sd(output[, i])
+    }
+  }
+
+  Zscore$ID <- rownames(input)
+  Zscore.m<-melt(Zscore)
+  Zscore.m$ID <- factor(Zscore.m$ID, levels = c("A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"))
+  # Zscore.m$variable <- factor(Zscore.m$variable, levels=c("AA1", "AA2", "AA3","AA4", "AA5","AA6","AA7", "AA8", "AA9", "AA10"))
+  Zscore.m$sample <- paste("Round", k, sep=" ")
+  heat.map <- rbind(heat.map, Zscore.m)
+}
+
+heat.map <- heat.map[-1,]
+heat.map$v5 <-""
+heat.map <- as.data.frame(heat.map)
+# heat.map$variable <- factor(as.character(heat.map$variable), levels=c("AA1", "AA2", "AA3","AA4", "AA5","AA6","AA7", "AA8", "AA9", "AA10"))
+
+
+### Zscore
+ggplot(heat.map, aes(variable,ID, fill=values())) + 
+  geom_tile(aes(fill = value), color = "white" , size=1)+
+  facet_grid_sc(v5~sample)+
+  scale_fill_gradient2( low = "blue4", mid = "white",
+                       high = "lightcoral", space = "Lab",
+                       na.value = "grey50", name="Zscore")+
+  theme_minimal()+
+  labs(title="casp3_heatmap", x="", y = "")+
+  theme(strip.text.x = element_text(size = 12, face="bold"),panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=13,  face="bold", hjust = 0.1),legend.text = element_text(size=13, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 13), axis.text=element_text(size=13, face="bold"), axis.title=element_text(size=13,face="bold"),
+        axis.text.x = element_text(angle = 90))+
+  coord_fixed(ratio = 1)+
+  scale_x_discrete(limits=c("AA1", "AA2", "AA3","AA4", "AA5","AA6","AA7", "AA8", "AA9", "AA10"))
+
+ggsave("Zscore_heatmap.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 300, limitsize = TRUE)
+
+
+
+```
+
+multiple sequence alignment (MSA)
+```{r}
+# Use Round 3 dataset for multiple sequence alignment
+trial <- read.csv(file_name[3])
+# extract around ~20,000 optimum sequence for alignment
+trial <- trial[trial$Freq>=15, ]
+AAseq<-AAStringSet(trial$first_10)
+
+## MSA, increase the penalty to avoid gap
+AAalign<-AlignSeqs(AAseq, gapOpening = c(-38, -32))
+
+#save the alignment
+write.csv(AAalign,paste0(file_name[3], "_MSA.csv"))
+
+
+# self-defined color pallete
+cs3 =  make_col_scheme(chars=c('D', 'E', 'R', 'H', 'K', 'W','I','F','A', 'P', 'V', 'M', 'L', 'Q', 'N', 'S', 'T', 'C', 'G', 'Y'), 
+                      groups=c('Acidic', 'Acidic', 'Basic', 'Basic', 'Basic', 'Hydrophobic','Hydrophobic','Hydrophobic','Hydrophobic','Hydrophobic','Hydrophobic','Hydrophobic','Hydrophobic', 'Neutral', 'Neutral', 'Polar','Polar','Polar','Polar','Polar'),
+                      cols=c('lightcoral','lightcoral', 'darkseagreen3','darkseagreen3','darkseagreen3', 'gray29','gray29','gray29','gray29','gray29','gray29','gray29','gray29', 'mediumpurple1','mediumpurple1', 'steelblue2','steelblue2','steelblue2','steelblue2','steelblue2'))
+
+# sequence logo of the alignment
+ggseqlogo(as.character(AAalign), method= "bits", col_scheme= cs3)+
+  labs(title="casp3", x=" ", y = "Bits\n") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=20, face="bold", hjust = 0.1),legend.text = element_text(size=20, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 20), axis.text=element_text(size=18, face="bold"), axis.title=element_text(size=20,face="bold"))+
+  coord_fixed(ratio = 3)
+ 
+# save the  MSA_sequence_logo
+ggsave("casp3_MSA_sequence_Logo.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+
+
+
+
+# based known information, define P4-P2'
+AAalign_filtered6 <- substr(AAalign, 23, 28)
+AAalign_filtered6 <- AAalign_filtered6[!grepl(AAalign_filtered6, pattern = "-")]
+
+# sequence of casp3 substrates
+ggseqlogo(AAalign_filtered6, method= "prob", col_scheme= cs3)+
+  labs(title="casp3", x=" ", y = "Probability\n") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=20, face="bold", hjust = 0.1),legend.text = element_text(size=20, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 20), axis.text=element_text(size=18, face="bold"), axis.title=element_text(size=20,face="bold"))+
+  coord_fixed(ratio = 3)+
+  scale_x_discrete(limits=c("P4", "P3","P2", "P1", "P1'", "P2'" ))
+# save the plot
+ggsave("casp3_sequence_Logo.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+
+```
+
+
+heatmap of casp3 substrates
+```{r}
+# align <- read.csv(paste0(file_name[3], "_align.csv"), stringsAsFactors = F)
+## get the P4-P2' sequence
+# casp6_align$AA6 <- substr(casp6_align$x, 23,28)
+align <- AAalign_filtered6
+## calculate the AA percentage of DEVE alignment
+AA<-c("A", "C", "D", "E", "F", "G", "H","I",  "K", "L", "M", "N", "P", "Q", "R", "S", "T","V", "W", "Y")
+# a summarized table
+calculation<- matrix(nrow=6, ncol=20) %>%as.data.frame
+colnames(calculation)<-AA
+# summarized how many each AA in each position
+for (i in 1:6) {
+  temp<-substr(align, i, i)
+  uniqueaa<- AA %>%  unique() %>%data.frame(stringsAsFactors = F)
+  colnames(uniqueaa) <- "uniqueaa"
+  result<-apply(uniqueaa,1,function(x) str_count(temp, x["uniqueaa"]))
+  colnames(result) <- uniqueaa$uniqueaa
+  result<-result[, AA]
+  for (j in 1:20) {
+    calculation[i,j]<-sum(result[,j])
+  }
+}
+
+calculation$total<-sum(calculation[, 1:20])/6
+calculation_percentage<- calculation/calculation$total[1]*100
+
+
+
+output <- calculation_percentage[, 1:20]%>%t()%>%as.data.frame()
+colnames(output) <- c("P4", "P3", "P2", "P1", "P1'", "P2'")
+# calculate Z-score
+Zscore <- output
+for (x in 1:6){
+  for (y in 1: 20) {
+    Zscore[y,x]<- (output[y,x]-5)/sd(output[, x])
+  }
+}
+
+Zscore$AA <- rownames(Zscore)
+Zscore.m <- melt(Zscore)
+
+Zscore.m$AA <- factor(Zscore.m$AA, levels = rev(c("A", "C", "D", "E", "F", "G", "H","I",  "K", "L", "M", "N", "P", "Q", "R", "S", "T","V", "W", "Y")))
+#generate the heatmap
+ggplot(Zscore.m, aes(variable, AA, fill=value)) + 
+  geom_tile( color = "white" , size=1)+
+  scale_fill_gradient2( low = "blue4", mid = "white",
+                        high = "lightcoral", space = "Lab",
+                        na.value = "grey50", name="Z-Score")+
+  #theme_minimal()+
+  labs(title="", x="", y = "")+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),
+        legend.title  = element_text(size=20, face="bold", hjust = 0.1),
+        legend.text = element_text(size=13, face="bold"), 
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 20), 
+        axis.text=element_text(size=18, face="bold"),
+        axis.text.x = element_text(angle = 90))+
+  #guides(fill=guide_legend(title="Z-score"))+
+  coord_fixed(ratio = 1)
+#save the plot
+ggsave("substrate_Zscore_heatmap.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 300, limitsize = TRUE)
+
+```
+
+
+Heatmap, sequence logo of Casp3 substrates recorded in MEROPS
+```{r}
+
+merops <- read.csv("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/NGS/10AA-Set9_NGS/casp3/MEROPS_casp3.csv")
+
+##change 3letter into 1 letter abbreviation
+code3 <- c("Ala", "Arg", "Asn", "Asp", "Cys", "Glu", "Gln", "Gly", "His", 
+"Ile", "Leu", "Lys", "Met", "Phe", "Pro", "Ser", "Thr", "Trp", 
+"Tyr", "Val")
+code1 <- c("A", "R", "N", "D", "C", "E", "Q", "G", "H", "I", "L", "K", 
+"M", "F", "P", "S", "T", "W", "Y", "V")
+
+for (i in 1:length(code3)){
+  for (j in 9:16){  
+  merops[,j] <- gsub(code3[i],code1[i],merops[,j],ignore.case=TRUE)
+  }
+}
+
+
+merops <- within(merops,  AA_seq <- paste(P4, P3, P2, P1,P1., P2., P3., P4., sep=""))
+write.csv(merops, "MEROPS_casp3.csv")
+
+### calculate amino acid percentage on each position
+
+result <- merops$AA_seq %>% strsplit(split="")  %>% c() %>% unlist() %>% unique() %>% data.frame(stringsAsFactors = F)
+colnames(result) <- c("AA")
+
+for (i in 9:16){
+  m <- table(merops[, i]) %>% as.data.frame()
+  colnames(m) <- c("AA", i)
+  result <- merge(result, m,"AA", all=T)
+}
+
+result <- result[result$AA %in% code1,]
+rownames(result) <- result$AA
+colnames(result) <- c("AA","P4","P3","P2","P1","P1'","P2'","P3'","P4'")
+result[is.na(result)] <- 0
+
+
+perc<-result
+Zscore<-perc
+
+##percentage
+for (i in 2: ncol(result)){
+  for (j in 1: nrow(result)) {
+    perc[j,i]<- 100*(result[j,i])/sum(result[, i])
+  }
+}
+
+##z-score  don't know what's the control using 5% of each AA
+for (i in 2: ncol(perc)){
+  for (j in 1: nrow(perc)) {
+    Zscore[j,i]<- (perc[j,i]-5)/sd(perc[, i])
+  }
+}
+
+
+Zscore.m<-melt(Zscore)
+#logp.value.m<-melt(logp.value)
+Zscore.m$variable <- factor(Zscore.m$variable, levels = c("P4", "P3", "P2","P1", "P1'","P2'","P3'", "P4'"))
+Zscore.m$AA <- factor(Zscore.m$AA, levels = rev(c("A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y")))
+#logp.value.m$variable <- factor(logp.value.m$Var2, levels = c("P4", "P3", "P2","P1", "P1'","P2'","P3'", "P4'"))
+#logp.value.m$AA <- factor(logp.value.m$Var1, levels = rev(c("A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y")))
+
+### Zscore
+ggplot(Zscore.m, aes(variable, AA, fill=value)) + 
+  geom_tile( color = "white" , size=1)+
+  scale_fill_gradient2( low = "blue4", mid = "white",
+                        high = "lightcoral", space = "Lab",
+                        na.value = "grey50", name="Z-Score")+
+  #theme_minimal()+
+  labs(title="", x="", y = "")+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),
+        legend.title  = element_text(size=20, face="bold", hjust = 0.1),
+        legend.text = element_text(size=13, face="bold"), 
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 20), 
+        axis.text=element_text(size=18, face="bold"),
+        axis.text.x = element_text(angle = 90))+
+  #guides(fill=guide_legend(title="Z-score"))+
+  coord_fixed(ratio = 1)
+
+ggsave("MEROPS_Zscore_heatmap_8res.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 300, limitsize = TRUE)
+
+
+
+### Zscore
+ggplot(Zscore.m[Zscore.m$variable!="P3'"&Zscore.m$variable!="P4'",], aes(variable, AA, fill=value)) + 
+  geom_tile( color = "white" , size=1)+
+  scale_fill_gradient2( low = "blue4", mid = "white",
+                        high = "lightcoral", space = "Lab",
+                        na.value = "grey50", name="Z-Score")+
+  #theme_minimal()+
+  labs(title="", x="", y = "")+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),
+        legend.title  = element_text(size=20, face="bold", hjust = 0.1),
+        legend.text = element_text(size=13, face="bold"), 
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 20), 
+        axis.text=element_text(size=18, face="bold"),
+        axis.text.x = element_text(angle = 90))+
+  #guides(fill=guide_legend(title="Z-score"))+
+  coord_fixed(ratio = 1)
+
+ggsave("MEROPS_Zscore_heatmap_6res.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 300, limitsize = TRUE)
+
+
+aa <- merops$AA_seq
+aa <- aa[!grepl(aa, pattern = "-")]
+# aa <- aa[nchar(aa)==8]
+
+
+ggseqlogo(substr(aa, 1,6), method= "prob", col_scheme= cs3)+
+  labs(title="casp3", x=" ", y = "Probability\n") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=20, face="bold", hjust = 0.1),legend.text = element_text(size=20, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 20), axis.text=element_text(size=18, face="bold"), axis.title=element_text(size=20,face="bold"))+
+  coord_fixed(ratio = 3)+
+  scale_x_discrete(limits=c("P4", "P3","P2", "P1", "P1'", "P2'" ))
+
+ggsave("MEROPS_casp3_sequence_Logo.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+
+
+```
+
+
+set up the scoring systerm
+scoring system based on PWM
+```{r}
+library(seqLogo)
+align <- read.csv(paste0(file_name[3], "_align.csv"), stringsAsFactors = F)
+## get the P4-P2' sequence
+align$AA6 <- substr(align$x, 23,28)
+align <- align[!grepl(align$AA6, pattern = "-"),]
+
+
+## calculate the AA percentage of DEVE alignment
+AA<-c("A", "C", "D", "E", "F", "G", "H","I",  "K", "L", "M", "N", "P", "Q", "R", "S", "T","V", "W", "Y")
+# a summarized table
+calculation<- matrix(nrow=6, ncol=20) %>%as.data.frame
+colnames(calculation)<-AA
+# summarized how many each AA in each position
+for (i in 1:6) {
+  temp<-substr(align$AA6, i, i)
+  uniqueaa<- AA %>%  unique() %>%data.frame(stringsAsFactors = F)
+  colnames(uniqueaa) <- "uniqueaa"
+  result<-apply(uniqueaa,1,function(x) str_count(temp, x["uniqueaa"]))
+  colnames(result) <- uniqueaa$uniqueaa
+  result<-result[, AA]
+  for (j in 1:20) {
+    calculation[i,j]<-sum(result[,j])
+  }
+}
+
+calculation$total<-apply(calculation, 1,sum)
+PPM <- calculation/calculation$total[1]
+PPM <- PPM[,1:20]
+PPM <- PPM %>% t() %>% as.data.frame()
+colnames(PPM) <- c("P4", "P3", "P2", "P1", "P1'", "P2'")
+pwm <- log2(PPM/0.05) 
+
+write.csv(t(pwm), "pwm.csv")
+
+score1 <- pwm
+score1$AA <- rownames(score1)
+score1.m <- melt(score1)
+
+score1.m$variable <- factor(score1.m$variable, levels = c("P2'", "P1'", "P1", "P2","P3", "P4"))
+score1.m$AA <- factor(score1.m$AA, levels = c("A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y"))
+
+ggplot(score1.m, aes(AA,variable)) + 
+  geom_tile(aes(fill = value), color = "white" , size=0.8)+
+  geom_text(aes(label = round(value, 1)), size = 3.7, face="bold") +
+  scale_fill_gradient2( low = "dodgerblue4", mid = "white",
+                        high = "red", space = "Lab",
+                        na.value = "grey50", name="PPSM")+
+  theme_minimal()+
+  labs(title="casp3, PWM", x="", y = "")+
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=1.5),
+        legend.title  = element_text(size=10, face="bold", hjust = 0.1),
+        legend.text = element_text(size=9, face="bold"), 
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 12), 
+        axis.text=element_text(size=13, face="bold"), 
+        axis.title=element_text(size=10,face="bold"))+
+  #guides(fill=guide_legend(title="Z-score"))+
+  coord_fixed(ratio = 1)
+
+ggsave("PSSM.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+
+calculate scores of peptides in MEROPS based on pwm
+```{r}
+# load the scoring matrix
+score <- read.csv("pwm.csv")
+# define 20 amino acid
+AA <-  c("A", "C", "D", "E", "F", "G", "H", "I", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "V", "W", "Y")
+# load the casp3 substrates recored in MEROPS database
+a <- read.csv("MEROPS_casp3.csv", stringsAsFactors = F)
+# clean up the table
+a <- a[!grepl(a$AA_seq,pattern="-"), ]
+# extract 6mer
+a$first_10 <- substr(a$AA_seq,1,6)
+#calcualte the score of each peptides
+a$max <-  lapply( a$first_10, function(x) sum(diag(as.matrix(score[,unlist(strsplit(x, split=""))])))) 
+a$max <- a$max %>% unlist()
+# save the scoring table
+write.csv(a, "MEROPS_casp3_pwm.csv")
+```
+
+
+calcualte scores based on pwm
+Lib 10AA
+```{r}
+# load the PSSM
+score <- read.csv("pwm.csv")
+# a list of files to calcualte scores of each peptide
+data.files <- c(file_name, "/Users/jie/Box\ Sync/Wells\ Lab/projects/TPM\ substrate\ identification/NGS/10AA-Set3\ NGS\ data/Lib3_characterization/Lib03.csv")
+# calcualte the score of each possible 6mer
+for (f in data.files){
+  # load the file  
+  a <- read.csv(f, stringsAsFactors = F)
+  # consider the constant region on N-terminal 
+    a$first_12 <- paste0("HE",a$first_10 )
+
+    a$RPM <- a$Freq/(sum(a$Freq)/1000000)
+     
+    
+    a <- a[, c( "Freq", "first_12", "RPM")]
+   # randomly sample 500,000 items of analysis
+    if (nrow(a)>500000){
+      a <- a[sample(nrow(a),500000),]
+      }
+    
+    b <- matrix(ncol=7, nrow = nrow(a))
+    c <- matrix(ncol=7, nrow = nrow(a))
+    d <- vector()
+    for (i in 1:7){
+        b[,i] <- substr(a$first_12, i, i+5)
+        #need to split into 30K chunks since score[, string] doesn't work above that threshold, bug?
+        j <- 30000
+        while(j < nrow(a)){
+            c[(j-29999):j,i] <- as.numeric(unlist(mclapply( b[(j-29999):j,i], function(x)
+                sum(diag(as.matrix(score[,unlist(strsplit(x, split=""))]))), mc.cores=(detectCores ()-1) )))
+            j <- j + 30000
+        }
+        c[(j-29999):nrow(a),i] <- as.numeric(unlist(mclapply( b[(j-29999):nrow(a),i], function(x)
+            sum(diag(as.matrix(score[,unlist(strsplit(x, split=""))]))), mc.cores= (detectCores ()-1) )))
+    }
+    d$max <- apply(c, 1,max)
+    a <- cbind(a,b,c,d)
+    
+    if (f=="/Users/jiezhou/Box\ Sync/Wells\ Lab/projects/TPM\ substrate\ identification/NGS/10AA-Set3\ NGS\ data/Lib3_characterization/Lib03.csv"){
+       write.csv(a, "Lib03_pwm.csv")
+     } else{
+    write.csv(a, paste0(substr(f, 1,3),"_pwm.csv"))}
+    gc()
+}
+
+```
+
+Lib 10AA Violon plot 
+```{r}
+setwd("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/substrate_phage_manuscript/submission/script_repository/Lib10AA")
+
+input <- read.csv("Lib03_pwm.csv")
+his <- input[, c("X", "max","Freq")]
+his$sample <- "Lib 10AA"
+file.name <- list.files(pattern = "*_pwm.csv")
+i=1
+for (f in file.name){
+  
+  if (f!="Lib03_pwm.csv" & !grepl(f, pattern = "MEROPS")){
+  
+  a <- read.csv(f, stringsAsFactors = F)
+  # for experiment datasets,we only look at those with freq>3
+  a <- a[a$Freq>3,]
+  a <- a[, c("X", "max", "Freq")]
+  a$sample <- paste0("Round ", i)
+  i <- i+1
+  his <- rbind(his, a)
+  } else if (grepl(f, pattern = "MEROPS")){
+  a <- read.csv(f, stringsAsFactors = F)
+  a$sample <- "MEROPS"
+  a$Freq <- 20
+  a <- a[, c("X", "max", "Freq", "sample")]
+  his <- rbind(his, a)
+  }
+}
+
+write.csv(his, "for_violin_sample50K_freq3.csv")
+
+his$sample <- factor(his$sample, levels = c("Lib 10AA","Round 1","Round 2", "Round 3", "MEROPS"))
+ggplot(his, aes(x=sample, y=max, fill=sample) ) + 
+  geom_violin(width=1.05)+
+  scale_fill_brewer(palette="Blues") + 
+  geom_boxplot(width=0.07, fill="white")+
+  theme_minimal()+
+  labs(title="casp3_10AA\n", y="Maximum Scores\n", x = " ")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 16),
+        axis.text=element_text(size=15, face="bold"),         
+        axis.title=element_text(size=16,face="bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1))+
+  scale_y_continuous(breaks=seq(-20,20,4), limits = c(-18, 18))+
+  scale_x_discrete(labels=c("Lib 10AA","Round 1","Round 2", "Round 3", "MEROPS"))+
+  coord_fixed(ratio = .1)
+
+ggsave("10AA_violin_freq3.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+
+DEVE sequence extraction
+```{r}
+# load the alignment file
+align <- read.csv("C02.csv_align.csv", stringsAsFactors = F)
+# extract 6mer
+align <- substr(align$x, 23, 28)
+# extract all the sequences that have an E at P1 position
+align <- align[grepl(align, pattern="...E..")]
+# plot sequence logo
+ggseqlogo(align, method= "prob", col_scheme= cs3)+
+  labs(title="casp3", x=" ", y = "Probability\n") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=20, face="bold", hjust = 0.1),legend.text = element_text(size=20, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 20), axis.text=element_text(size=18, face="bold"), axis.title=element_text(size=20,face="bold"))+
+  coord_fixed(ratio = 3)+
+  scale_x_discrete(limits=c("P4", "P3","P2", "P1", "P1'", "P2'" ))
+# save the plot
+ggsave("casp3_DEVD_Logo.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+For Lib hP, we first used bowtiew2 to convert all the fastaq files into SAM file, and then used Samtools to convert them into bam file.
+The in-house bash script was attached as well.
+
+bam to csv
+```{r}
+# setworking directory (all the files)
+setwd("/Users/jie/Documents/NGS_raw/hP-set5NGS/casp3")
+
+#list names of all BAM files
+file_name <- list.files(pattern = "\\.bam$")
+
+#read whole list
+com_list <- read.csv("/Users/jie/Documents/NGS_raw/hP-set5NGS/casp3/peptide_gene_sequence_mapping.csv")
+
+# add a new column with seq_id with fragment removed to know how many protein isoforms
+#com_list$uniq <- sub(com_list$seq_id, pattern = "fragment_[0-9]+", replacement = "")
+#num_isoform <- nrow(com_list[!duplicated(com_list$uniq),])
+
+temp <- com_list[, c("seq_id","index","gene","sequence")]
+colnames(temp)[1] <- "rname"
+read_summary <-  matrix(nrow = 3, ncol = 2) %>% as.data.frame()
+colnames(read_summary) <- c("file_name", "uniqe_pep")
+
+for (i in 2: length(file_name)){
+  
+  #read in entire BAM file
+  bam <- scanBam(file_name[i])
+#names of the BAM fields
+  names(bam[[1]])
+#distribution of BAM flags
+  table(bam[[1]]$flag)
+#function for collapsing the list of lists into a single list
+#as per the Rsamtools vignette
+ .unlist <- function (x){
+  ## do.call(c, ...) coerces factor to integer, which is undesired
+    x1 <- x[[1L]]
+    if (is.factor(x1)){
+      structure(unlist(x), class = "factor", levels = levels(x1))
+    } else {
+      do.call(c, x)
+    }
+  }
+
+#store names of BAM fields
+  bam_field <- names(bam[[1]])
+
+#go through each BAM field and unlist
+  list <- lapply(bam_field, function(y) .unlist(lapply(bam, "[[", y)))
+
+#store as data frame
+  bam_df <- do.call("DataFrame", list)
+  names(bam_df) <- bam_field
+  write.csv(bam_df, paste(substr(file_name[i], 1,3), "_complete.csv", sep=""))
+# extract aligned
+ bam_df_aligned<-bam_df[!is.na(bam_df$mapq), ]
+
+#######################
+#quality control  mapq>10, cigarM >100
+####################### 
+# extract the column that I care
+   a <- bam_df_aligned[bam_df_aligned$mapq>=10, c("rname", "mapq")]
+## order the rname
+   b <- a[order(a$rname),]
+# count the duplicate as freq
+   cd <- table(as.character(b$rname)) %>% as.data.frame()
+   colnames(cd)[1] <- "rname"
+##remove duplicate and add to freq
+   d <- b[!duplicated(b$rname),]
+##  merge c and d
+   e <- merge(cd,d,"rname")
+##  merge gene name and AA sequence
+   f <- merge(e, temp, "rname")
+   f <- f[, c("rname","Freq" ,"index" ,"gene" ,"sequence")]
+  
+  write.csv(f, paste(substr(file_name[i], 1,3), "_mapq10.csv", sep = ""))
+}
+  
+
+```
+
+score calculation of Lib hp
+```{r}
+# load PSSM
+score <- read.csv("pwm.csv")
+# list all the files that we want to calcualte scores
+file.name <- c("/Users/jie/Documents/NGS_raw/hP-set5NGS/casp3/A02_mapq10.csv",
+               "/Users/jie/Documents/NGS_raw/hP-set5NGS/casp3/B02_mapq10.csv",
+               "/Users/jie/Documents/NGS_raw/hP-set5NGS/casp3/C02_mapq10.csv",
+               "/Users/jie/Box Sync/Wells Lab/projects/TPM substrate identification/NGS/10AA-Set9_NGS/casp3/hp/peptide_gene_sequence_mapping.csv"
+               )
+for (f in file.name){
+  a <- read.csv(f, stringsAsFactors = F)
+      # remove non aa residue sequence
+  a <- a[!(grepl(a$sequence, pattern = "U")|grepl(a$sequence, pattern = "X")|grepl(a$sequence, pattern = "B")|grepl(a$sequence, pattern = "O")|grepl(a$sequence, pattern = "J")|grepl(a$sequence, pattern = "B")), ]
+  if (grepl(f, pattern = "mapping")){
+  colnames(a)[1] <-"rname" 
+  a$Freq <- 50
+  }  
+  
+    a <- a[, c( "rname","Freq", "gene", "sequence")]
+    a$RPR <- a$Freq/(sum(a$Freq)/1000000)
+   # a <- a[a$Freq>=2,]
+    
+    b <- matrix(ncol=44, nrow = nrow(a))
+    c <- matrix(ncol=44, nrow = nrow(a))
+    d <- vector()
+    for (i in 38:44){
+        b[,i] <- substr(a$sequence, i, i+5)
+        #need to split into 30K chunks since score[, string] doesn't work above that threshold, bug? no, just because some sequence has non-AA residue....but using chuncks makes it faster
+        j <- 30000
+        while(j < nrow(a)){
+            c[(j-29999):j,i] <- as.numeric(unlist(mclapply( b[(j-29999):j,i], function(x)
+                sum(diag(as.matrix(score[,unlist(strsplit(x, split=""))]))), mc.cores=(detectCores ()-1) )))
+            j <- j + 30000
+        }
+        c[(j-29999):nrow(a),i] <- as.numeric(unlist(mclapply( b[(j-29999):nrow(a),i], function(x)
+            sum(diag(as.matrix(score[,unlist(strsplit(x, split=""))]))), mc.cores= (detectCores ()-1) )))
+       
+    }
+    d$max <- apply(c, 1,max)
+    a <- cbind(a,b,c,d)
+    
+    if(grepl(f, pattern = "mapping")){
+     write.csv(a, "Lib_hp_pwm.csv") 
+    } else{
+    write.csv(a, paste0(substr(f, (nchar(f)-13),nchar(f)-11),"_hp_pwm.csv"))}
+}
+
+
+
+```
+
+
+sequence logo for top cleavage sites identified in Lib hP
+```{r}
+a <- read.csv("C02_hp_pwm.csv", stringsAsFactors = F)
+# trial <- a[, 51:94]
+a$Index <- apply(a[, 51:94], 1, which.max)
+a <- a[a$max>0,]
+# x <- a[!is.na(a$Index),]
+
+x <- a[a$Freq>35, ]
+b <- vector()
+
+for (i in 1:nrow(x)){
+    b <- append(b, x[i, x$Index[i]+6])
+}
+
+b <- unlist(b[grepl(b, pattern = "...D..")|grepl(b, pattern = "...E..")])
+ggseqlogo(unlist(b), method= "prob", col_scheme= cs3)+
+  labs(title="casp3", x=" ", y = "Probability\n") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=2),legend.title  = element_text(size=20, face="bold", hjust = 0.1),legend.text = element_text(size=20, face="bold"), plot.title= element_text(hjust = 0.5, face ="bold", size = 20), axis.text=element_text(size=18, face="bold"), axis.title=element_text(size=20,face="bold"))+
+  coord_fixed(ratio = 3)+
+  scale_x_discrete(limits=c("P4", "P3","P2", "P1", "P1'", "P2'" ))
+
+ggsave("casp3_hP_sequence_Logo.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+
+violin plot for Lib hP
+```{r}
+#histogram R1, R2,R3, input, MEROPS
+input <- read.csv("Lib_hp_pwm.csv")
+his <- input[, c("X", "max","Freq")]
+his$sample <- "Lib hP"
+file.name <- list.files(pattern = "*hp_pwm.csv")
+i=1
+for (f in file.name){
+  
+  if (f!="Lib_hp_pwm.csv" ){
+  a <- a[a$Freq>3,]
+  a <- read.csv(f, stringsAsFactors = F)
+  a <- a[, c("X", "max", "Freq")]
+  a$sample <- paste0("Round ", i)
+  i <- i+1
+  his <- rbind(his, a)
+  } 
+}
+
+write.csv(his, "hP_violin_all.csv")
+
+his <- read.csv("hP_violin_all.csv", stringsAsFactors = F)
+
+his$sample <- factor(his$sample, levels = c("Lib hP","Round 1","Round 2", "Round 3"))
+ggplot(his, aes(x=sample, y=max, fill=sample) ) + 
+  geom_violin(width=1.05)+
+  scale_fill_brewer(palette="Blues") + 
+  geom_boxplot(width=0.07, fill="white")+
+  theme_minimal()+
+  labs(title="Casp3_hP\n", y="Maximum Scores\n", x = " ")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 16),
+        axis.text=element_text(size=15, face="bold"),         
+        axis.title=element_text(size=16,face="bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1))+
+  scale_y_continuous(breaks=seq(-16,20,4), limits = c(-16, 20))+
+  scale_x_discrete(labels=c("Lib hP","Round 1","Round 2", "Round 3"))+
+  coord_fixed(ratio = .1)
+
+ggsave("hP_violin_all.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+
+Lib 10AA scatter plot
+```{r}
+
+file_name <- list.files(pattern = ".0._pwm.csv$")
+plot.scatter <- read.csv(file_name[4], stringsAsFactors = F)
+plot.scatter <- plot.scatter[sample(nrow(plot.scatter),500000),]
+plot.scatter <- plot.scatter[,c("RPM", "max")]
+plot.scatter$sample <- "Input"
+
+
+for (i in 1:3){
+  temp <- read.csv(file_name[i], stringsAsFactors = F)
+   if (nrow(temp)>500000){
+      temp <- temp[sample(nrow(temp),500000),]
+      }
+  temp <- temp[temp$Freq>3,]
+  temp <- temp[,  c("RPM", "max")]
+  temp$sample <- paste0("Round ", i)
+  plot.scatter <- rbind(plot.scatter, temp)
+  
+}
+
+plot.scatter$title <- "Score v.s. NGS Count"
+
+write.csv(plot.scatter, "10AA_scatter.csv")
+ggplot(plot.scatter, aes(x=RPM, y=max, color=sample)) + 
+  geom_point(shape=1, size=1 ) +
+  facet_grid_sc(sample~title)+
+  theme_classic()+
+  scale_color_brewer(palette="RdBu")+
+  labs( y="Maximum Scores of Peptides\n", x = "\nRPM")+  #title="Scoring Distribution\n",
+  theme(
+    strip.text = element_text(size = 12, face ="bold"),
+    legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+    legend.text = element_text(size=12, face="bold"),     
+    plot.title= element_text(hjust = 0.5, face ="bold", size = 15),
+    axis.text=element_text(size=11, face="bold"),         
+    axis.title=element_text(size=15,face="bold"))+
+  scale_x_continuous(limits=c(0,1300),breaks=seq(0,1300,200))+
+  scale_y_continuous( breaks = seq(-20, 20, 8))+ #limits = c(-13, 17),
+  coord_fixed(ratio = 13)
+
+ggsave("10AA_scatter.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+#600 X 512
+
+```
+
+Lib hp scatter plot
+```{r}
+
+file_name <- list.files(pattern = "*hp_pwm.csv$")
+plot.scatter <- read.csv(file_name[4], stringsAsFactors = F)
+# plot.scatter <- plot.scatter[sample(nrow(plot.scatter),500000),]
+plot.scatter <- plot.scatter[,c("RPR", "max")]
+plot.scatter$sample <- "Input"
+
+for (i in 1:3){
+  temp <- read.csv(file_name[i], stringsAsFactors = F)
+   # if (nrow(temp)>500000){
+   #    temp <- temp[sample(nrow(temp),500000),]
+   #    }
+  temp <- temp[,  c("RPR", "max")]
+  temp$sample <- paste0("Round ", i)
+  plot.scatter <- rbind(plot.scatter, temp)
+  gc()
+  
+}
+
+
+plot.scatter$title <- "Score v.s. NGS Count"
+
+# plot.scatter <- read.csv("hP_scatter.csv",stringsAsFactors = F)
+write.csv(plot.scatter, "hP_scatter.csv")
+
+ggplot(plot.scatter, aes(x=RPR, y=max, color=sample)) + 
+  geom_point(shape=1, size=1 ) +
+  facet_grid_sc(sample~title)+
+  theme_classic()+
+  scale_color_brewer(palette="RdBu")+
+  labs( y="Maximum Scores of Peptides\n", x = "\nRPM")+  #title="Scoring Distribution\n",
+  theme(
+    strip.text = element_text(size = 12, face ="bold"),
+    legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+    legend.text = element_text(size=12, face="bold"),     
+    plot.title= element_text(hjust = 0.5, face ="bold", size = 15),
+    axis.text=element_text(size=12, face="bold"),         
+    axis.title=element_text(size=15,face="bold"))+
+  scale_x_continuous(limits=c(0,3000),breaks=seq(0,3000,500))+
+  scale_y_continuous( breaks = seq(-20, 20, 8))+ #limits = c(-13, 17),
+  coord_fixed(ratio = 30)
+
+ggsave("hP_scatter_all.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+#600 X 512
+
+
+```
+
+
+
+Lib 10AA venn diagram
+```{r}
+
+file_name <- c("A02.csv", "B02.csv", "C02.csv")
+r1 <- read.csv(file_name[1], stringsAsFactors = F)
+r1 <- r1[, c("first_10", "Freq")]
+r2 <- read.csv(file_name[2], stringsAsFactors = F)
+r2 <- r2[, c("first_10", "Freq")]
+r3 <- read.csv(file_name[3], stringsAsFactors = F)
+r3 <- r3[, c("first_10", "Freq")]
+
+big_max <- rbind(r1, r2, r3)
+big_max <- big_max[!duplicated(big_max$rname), ]
+
+file <- list(r1,r2,r3)
+
+for (i in 1:3){
+  x <- as.data.frame(file[i])
+  #x <- x %>%
+  #group_by(rname) %>%
+  # dplyr::summarize(
+  #Freq = sum(Freq)
+  #)
+  #x <- x[x$Freq>4,]
+  big_max <- merge(big_max, x[,c("first_10", "Freq")], by="first_10", all=T)
+}
+big_max1 <- big_max[,-2] ## Pool2, caspase-6 specific substrate
+
+colnames(big_max1) <- c("first_10","R1", "R2", "R3")
+rownames(big_max1) <- big_max1$rname
+big_max1[,2:4] <- lapply(big_max1[, 2:4], is.na)
+big_max1 <- big_max1[, 2:4]
+big_max1 <- !big_max1
+
+write.csv(big_max1, "10AA_venn_all.csv")
+
+P1 <- vennCounts(big_max1[,c("R1", "R2", "R3")])
+vennDiagram(P1)
+
+
+round1 <- euler(c("R1" = 770597, "R2" = 199177, "R3" = 70073, "R1&R2" = 144424, "R2&R3" = 107107, "R1&R3" = 16086, "R1&R2&R3" = 254114))
+png(filename="10AA_venn_all.png")
+plot(round1, edges=F, alpha=.8, fill=c("skyblue", "pink", "darkseagreen1"), quantities = list(fontsize = 15),   labels = list(fontsize = 0))
+dev.off()
+
+
+
+
+```
+
+
+Lib hP venn diagram
+```{r}
+
+file_name <- list.files(pattern = "\\mapq10.csv$")
+
+r1 <- read.csv(file_name[1], stringsAsFactors = F)
+r2 <- read.csv(file_name[2], stringsAsFactors = F)
+r3 <- read.csv(file_name[3], stringsAsFactors = F)
+
+big_max <- rbind(r1, r2, r3)
+big_max <- big_max[!duplicated(big_max$rname),c("rname", "Freq") ]
+
+file <- list(r1,r2,r3)
+
+for (i in 1:3){
+  x <- as.data.frame(file[i])
+  #x <- x %>%
+  #group_by(rname) %>%
+  # dplyr::summarize(
+  #Freq = sum(Freq)
+  #)
+  x <- x[x$Freq>3,]
+  big_max <- merge(big_max, x[,c("rname", "Freq")], by="rname", all=T)
+}
+big_max1 <- big_max[,-2] ## Pool2, caspase-6 specific substrate
+
+colnames(big_max1) <- c("rname","R1", "R2", "R3")
+rownames(big_max1) <- big_max1$rname
+big_max1[,2:4] <- lapply(big_max1[, 2:4], is.na)
+
+big_max1 <- big_max1[, 2:4]
+big_max1 <- !big_max1
+
+write.csv(big_max1, "hp_venn_freq3.csv")
+
+P1 <- vennCounts(big_max1[,c("R1", "R2", "R3")])
+vennDiagram(P1)
+
+
+round1 <- euler(c("R1" = 136156, "R2" = 37618, "R3" = 11751, "R1&R2" = 78038, "R2&R3" = 12608, "R1&R3" = 19301, "R1&R2&R3" = 144058))
+png(filename="hP_venn_all.png")
+plot(round1, edges=F, alpha=.8, fill=c("skyblue", "pink", "darkseagreen1"), quantities = list(fontsize = 15),   labels = list(fontsize = 0))
+dev.off()
+
+## frq>3
+
+round1 <- euler(c("R1" =41116, "R2" = 19146, "R3" = 1863, "R1&R2" = 24521, "R2&R3" = 7030, "R1&R3" = 1692, "R1&R2&R3" = 61461))
+png(filename="hP_venn_freq3.png")
+plot(round1, edges=F, alpha=.8, fill=c("skyblue", "pink", "darkseagreen1"), quantities = list(fontsize = 15),   labels = list(fontsize = 0))
+dev.off()
+
+```
+
+plot for # of cleavage site 
+```{r}
+
+a <- read.csv("C02_hp_pwm.csv")
+
+## calculate the number of pentential cleavage sites   
+  a <- a[a$Freq>3,]
+  b <- a[,51:94] #extract the columns with score
+  c <- b>0 # whether it's >100, give T or F and sum can give you how many sites
+  summary<- a[,c("rname", "Freq","gene","sequence","max")]
+  summary$sites <- apply(c, 1, sum)
+  
+  ggplot(summary, aes(x=sites) ) + 
+  geom_histogram(binwidth=1,  position="identity", fill="white", color="steelblue", size=1.5)+#, aes(y=..density..)
+  geom_density(alpha=.2, fill="#FF6666") +
+  #theme_minimal()+
+  labs(title="Cutting Sites on Each Peptiden", x="\nNumber of Cleavage Sites", y = "Counts\n")+
+  theme(legend.title  = element_text(size=10, face="bold", hjust = 0.5),
+        legend.text = element_text(size=9, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 15),
+        axis.text=element_text(size=16, face="bold"),         
+        axis.title=element_text(size=18,face="bold"))+
+  scale_y_continuous(breaks=seq(0,80000,3000))+
+  scale_x_continuous(breaks=seq(-1,9,1), limits = c(-1,9))  +
+    coord_fixed(ratio = .0005)
+  
+  ggsave("cleavage_sites.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+  
+```
+
+
+secondary structure of the cleavage site based on computiational prediction
+```{r}
+a <- read.csv("C02_hp_pwm.csv", stringsAsFactors = F)# Round 3, highest concentration
+
+#take only scores
+b <- a[,51:94]
+#add the selected peptide column name into the dataframe
+a$temp <- colnames(b)[apply(b,1,which.max)]
+# the starting AA position in the 49 AA sequence, P4 position
+#a$P4 <-  as.numeric(a$temp%>% sub(pattern = "V", replacement = ""))-48
+## calculate secondary structure of the whole peptides
+  # as biostring
+a$sequence <- AAStringSet(a$sequence)
+  # secondary str, H: GIH, E=E, other=C: loops and turns, random structures
+a$HEC <- PredictHEC(a$sequence)
+  # only get the secondary str of cleavage site P4-P2'
+a$temp <- sub(a$temp, pattern = "X", replacement = "")
+a$temp <- sub(a$temp, pattern = ".1", replacement = "") %>% as.numeric()
+
+
+for (i in 1: nrow(a)){
+  a$sec.str[i] <- substr(a$HEC[i], a$temp[i], a$temp[i]+6)
+}  
+
+
+
+sec_str1<-c("H", "E", "C")
+calculation1<- matrix(nrow=6, ncol=3) %>%as.data.frame
+colnames(calculation1)<-sec_str1
+# summarized how many each AA in each position
+for (i in 1:6) {
+  temp<-substr(a$sec.str, i, i)
+  uniqueaa<- sec_str1 %>%  unique() %>%data.frame(stringsAsFactors = F)
+  colnames(uniqueaa) <- "uniqueaa"
+  result<-apply(uniqueaa,1,function(x) str_count(temp, x["uniqueaa"]))
+  colnames(result) <- uniqueaa$uniqueaa
+  result<-result[, sec_str1]
+  result[is.na(result)] <- 0
+  for (j in 1:3) {
+    calculation1[i,j]<-sum(result[,j])
+  }
+}
+
+calculation1$total<-sum(calculation1[, 1:3])/6
+calculation1_percentage<- calculation1/calculation1$total[1]*100
+
+
+write.csv(calculation1_percentage, "calculation_2nd_str_peptide.csv")
+
+perc1 <- read.csv("calculation_2nd_str_peptide.csv", stringsAsFactors = F)
+
+perc1 <- calculation1_percentage[, 1:3] %>%t()%>% as.data.frame()
+perc1$str <- rownames(perc1)
+colnames(perc1) <- c("P4", "P3", "P2", "P1", "P1'", "P2'")
+
+perc1.m <- melt(perc1)
+
+colnames(perc1.m)[1] <- "AA"
+
+perc1.m$AA <- factor(perc1.m$AA, levels = c( "H", "E","C"))
+
+ggplot(perc1.m,aes(x=variable, y=value, fill=AA))+
+  geom_bar(stat="identity", color="black",position=position_stack(), width = .4) +
+  scale_fill_brewer(direction = -1, palette="Blues")+
+  theme_minimal()+
+  theme(axis.text.x = element_text( hjust = 1))+
+  labs(title="2nd_structure \n", x="", y = "Percentage (%) \n")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 14),
+        axis.text=element_text(size=18, face="bold", hjust = 0.5),         
+        axis.title=element_text(size=23,face="bold"))+
+  scale_y_continuous(breaks=seq(0,100,10))+
+  guides(fill=guide_legend(title="2nd Structure"))+
+  coord_fixed(ratio=.05)#+
+
+ggsave("2nr_str.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+
+```
+
+
+# 2nd structure based on substrates that a PDB file is available
+```{r}
+per <- read.csv("/Users/jiezhou/Box/Wells Lab (Jie Zhou)/projects/TPM substrate identification/NGS/hP-Set1-NGS data/casp-3/calculation_2nd_str2.csv", stringsAsFactors = F)
+
+perc2 <- per[, 2:4]%>%t()%>% as.data.frame()
+perc2$str <- rownames(perc2)
+# perc2 <- perc2[, 1:6]
+colnames(perc2) <- c("P4", "P3", "P2", "P1", "P1'", "P2'", "str")
+perc2.m <- melt(perc2)
+
+perc2.m$str <- factor(perc2.m$str, levels = c("H", "S", "L"), labels =  c("H", "E", "L"))
+
+
+my_colors <- rev(RColorBrewer::brewer.pal(4, "RdPu")[1:3])
+ggplot(perc2.m,aes(x=variable, y=value, fill=str))+
+  geom_bar(stat="identity", color="black",position=position_stack(), width = .4) +
+  # scale_fill_brewer(direction = -1, palette="YlOrBr")+
+  scale_fill_manual(values = my_colors)+
+  theme_minimal()+
+  theme(axis.text.x = element_text( hjust = 1))+
+  labs(title="2nd_structure \n", x="", y = "Percentage (%) \n")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 14),
+        axis.text=element_text(size=18, face="bold", hjust = 0.5),         
+        axis.title=element_text(size=23,face="bold"))+
+  scale_y_continuous(breaks=seq(0,100,10))+
+  guides(fill=guide_legend(title="2nd Structure"))+
+  coord_fixed(ratio=.05)#+
+
+ggsave("2nr_str_PDB.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+```
+
+
+extract solvent accesibility and 2nd strucure information from Uniprot and PDB database
+```{r}
+# load the the table of casp3 substrates obtained from MEROPS database
+merops <- read.csv("MEROPS_casp3.csv", stringsAsFactors = F)
+merops <- merops[, c("Substrate","Uniprot","AA_seq"  )]
+merops$Uniprot[merops$Uniprot == ""] <- NA_character_
+merops <- merops[!is.na(merops$Uniprot),]
+merops$AA_seq <- sub(merops$AA_seq, pattern = "-", replacement = "")
+colnames(merops) <- c("substrate","Entry","AA") 
+# uniprot_human.csv was downloaded from UniprotKB
+uniprot <- read.csv("uniprot_human.csv", stringsAsFactors = F)
+
+merops <- merge(merops, uniprot, by="Entry", all.x=T)
+
+merops$Cross.reference..PDB.[merops$Cross.reference..PDB. == ""] <- NA_character_
+merops <- merops[!is.na(merops$Cross.reference..PDB.),]
+
+
+merops$PDB_pick <- NA
+
+aa321.modified <- function (aa) ### function aa321 has a warning message, which is bothering. 
+{
+    aa1 <- c("-", ".", "X", bio3d::aa.table$aa1)
+    aa3 <- c("---", "---", "UNK", bio3d::aa.table$aa3)
+    convert <- function(x) {
+        if (is.na(x)) 
+            return(NA)
+        if (all(x != aa3)) {
+            return("X")
+        }
+        else {
+            return(aa1[which(x == aa3)])
+        }
+    }
+    return(as.vector(unlist(sapply(aa, convert))))
+}
+
+
+for (i in 36: nrow(merops)){
+  tryCatch({
+    
+    x <- strsplit(merops$Cross.reference..PDB.[i], split=";")%>% unlist()
+   
+    for (j in x){
+      pdb <- read.pdb(get.pdb(j, URLonly = T)) %>% suppressWarnings()
+      aa.seq  <- paste(pdbseq(pdb), collapse="")
+      if(grepl(aa.seq, pattern = merops$AA[i])){
+        merops$PDB_pick[i] <- j
+        dssp <- dssp(pdb, exefile = "/Users/jie/opt/anaconda3/bin/mkdssp", resno=T, full=FALSE, verbose=FALSE) %>% suppressWarnings()## using dssp, note, DSSP show every AA + small molecue
+        atom <- pdb$atom # find the residue ID, chain, and residue number
+        atom <- atom[, c("chain", "resno","resid")] # each residue has has differnt atoms
+        atom <- atom[!duplicated(atom[, c("chain", "resno")]), ] #get all the residue
+        atom[,4] <- apply(atom[, c("resno", "chain")], 1, paste, collapse= "_",sep='')
+        atom[,5] <- apply(atom[,"resid", drop =F], 1,aa321.modified)
+        atom <- atom[!grepl(atom$V5, pattern="X"),]
+        atom <- atom[with(atom, order(chain, resno)), ]
+        aa.seq <-  paste(atom$V5, collapse ='') ## get a new sequence including X as a non amino acid residue
+        pos <- motif.find(merops$AA[i], aa.seq)[1]
+        res.name <- atom$V4[pos]
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')## if there are more than one space
+        pos <- which(names(dssp$sse)==paste(res.name, "_NA", sep = ''))
+   # merops[i, 7] <- pos ## start position on pdb sequence extraction, with no grey residue, but same with dssp's acc
+        merops[i, 8]<- paste(dssp$acc[pos], dssp$acc[pos+1], dssp$acc[pos+2], dssp$acc[pos+3], dssp$acc[pos+4],dssp$acc[pos+5], collapse  = ' ') ## sovent acce
+        merops[i, 9] <- sum(dssp$acc[pos], dssp$acc[pos+1], dssp$acc[pos+2], dssp$acc[pos+3], dssp$acc[pos+4],dssp$acc[pos+5]) ## sum of solvent accesibility
+        str <- ''
+        for (j in 0:5 ){
+          if(dssp$sse[[pos+j]]==" "){
+            str <- paste(str, "L", collapse  = '')
+          } else {str <- paste(str, dssp$sse[[pos+j]], collapse  = '') }
+        }## secondary structure
+#str <- paste(dssp$sse[[pos]],dssp$sse[[pos+1]], dssp$sse[[pos+2]], dssp$sse[[pos+3]], dssp$sse[[pos+4]], dssp$sse[[pos+5]], collapse ='') 
+        merops[i,10] <- str
+        merops[i, 11 <- pos]
+        rm(pdb, aa.seq,str, dssp, atom, res.name)
+        break
+      }
+     }
+  }, error=function(e){}
+ )
+}
+
+
+colnames(merops) <- c( "Entry", "substrate" ,  "AA", "Cross.reference..PDB.", "Gene.names" ,  "Entry.name","PDB_pick" ,"acc","acc_sum","pos"          )
+
+merops <- merops[!is.na(merops$acc),]
+write.csv(merops, "casp3_merops_dssp.csv")
+
+```
+
+
+human_hP_str_analysis
+```{r}
+# GI number to UniprotKB Entry mapping was done with ID mapping tools on Uniprot website
+a <- read.csv("GI_UniprotKB_mapping.csv", stringsAsFactors = F)
+b <- read.csv("uniprot_human.csv", stringsAsFactors = F)
+c <- merge(a, b, by="Entry", all=T)
+c <- c[!is.na(c$gi), ]
+
+c$Cross.reference..PDB.[c$Cross.reference..PDB. == ""] <- NA_character_
+c <- c[!is.na(c$Cross.reference..PDB.),]
+c <- c[, c(1, 3,4)]
+
+
+
+exp <- read.csv("C01_hp_pwm.csv", stringsAsFactors = F)
+exp <- exp[exp$max>0&exp$Freq>3, ]
+exp$Index <- apply(exp[, 51:94], 1, which.max)
+
+for (i in 1:nrow(exp)){
+  exp$cleavage.site[i] <- exp[i, exp$Index[i]+6]
+}
+exp <- exp[, c(1:6, 95:97)]
+# 
+# uniprot <- read.csv("/Users/jie/Box Sync/Wells Lab/projects/TPM substrate identification/NGS/hP-Set1-NGS data/casp-3/uniprot_human_str.csv",stringsAsFactors = F)
+
+
+exp$gi <- NA
+for (i in 1:nrow(exp)){
+  pos2= regexpr('\\|ref\\|', exp$rname[i])
+  exp$gi[i] <- substr(exp$rname[i], 4, as.numeric(pos2[1]-1))
+}
+
+exp <- exp[,-1]
+# ref <- read.csv("Lib_GI_uniprotKB_mapping.csv", stringsAsFactors = F)
+# ref <- ref[,-1]
+# ref <- ref[,-2]
+
+exp <- merge(exp, c, ID="gi", all=T)
+
+
+
+exp <- exp[!duplicated(exp$sequence),]
+
+exp <- exp[!(duplicated(exp[c("sequence","Entry")]) | duplicated(exp[c("sequence","Entry")], fromLast = TRUE)), ]
+
+exp1 <- exp[!is.na(exp$Cross.reference..PDB.)&!is.na(exp$sequence), ]
+
+exp2 <- exp1[!(duplicated(exp1[c("cleavage.site","Entry")]) | duplicated(exp1[c("cleavage.site","Entry")], fromLast = TRUE)), ]
+exp3 <- exp2[!is.na(exp2$Cross.reference..PDB.), ]
+
+write.csv(exp3, "casp3_gi_uniprot_pdb.csv")
+
+aa321.modified <- function (aa) ### function aa321 has a warning message, which is bothering. 
+{
+    aa1 <- c("-", ".", "X", bio3d::aa.table$aa1)
+    aa3 <- c("---", "---", "UNK", bio3d::aa.table$aa3)
+    convert <- function(x) {
+        if (is.na(x)) 
+            return(NA)
+        if (all(x != aa3)) {
+            return("X")
+        }
+        else {
+            return(aa1[which(x == aa3)])
+        }
+    }
+    return(as.vector(unlist(sapply(aa, convert))))
+}
+
+
+exp1 <- exp2
+exp1$PDB_pick <- NA
+
+for (i in 1: nrow(exp1)){
+  tryCatch({
+    
+    x <- strsplit(exp1$Cross.reference..PDB.[i], split=";")%>% unlist()
+   
+    for (j in x){
+      pdb <- read.pdb(get.pdb(j, URLonly = T)) %>% suppressWarnings()
+      aa.seq  <- paste(pdbseq(pdb), collapse="")
+      if(grepl(aa.seq, pattern = exp1$cleavage.site[i])){
+        exp1$PDB_pick[i] <- j
+        dssp <- dssp(pdb, exefile = "/Users/jie/opt/anaconda3/bin/mkdssp", resno=T, full=FALSE, verbose=FALSE) %>% suppressWarnings()## using dssp, note, DSSP show every AA + small molecue
+        atom <- pdb$atom # find the residue ID, chain, and residue number
+        atom <- atom[, c("chain", "resno","resid")] # each residue has has differnt atoms
+        atom <- atom[!duplicated(atom[, c("chain", "resno")]), ] #get all the residue
+        atom[,4] <- apply(atom[, c("resno", "chain")], 1, paste, collapse= "_",sep='')
+        atom[,5] <- apply(atom[,"resid", drop =F], 1,aa321.modified)
+        atom <- atom[!grepl(atom$V5, pattern="X"),]
+        atom <- atom[with(atom, order(chain, resno)), ]
+        aa.seq <-  paste(atom$V5, collapse ='') ## get a new sequence including X as a non amino acid residue
+        pos <- motif.find(exp1$cleavage.site[i], aa.seq)[1]
+        res.name <- atom$V4[pos]
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')
+        res.name <- sub(res.name, pattern = '[[:space:]]', replacement = '')## if there are more than one space
+        pos <- which(names(dssp$sse)==paste(res.name, "_NA", sep = ''))
+        
+   # exp1[i, 7] <- pos ## start position on pdb sequence extraction, with no grey residue, but same with dssp's acc
+        exp1[i, 13]<- paste(dssp$acc[pos], dssp$acc[pos+1], dssp$acc[pos+2], dssp$acc[pos+3], dssp$acc[pos+4],dssp$acc[pos+5], collapse  = ' ') ## sovent acce
+        exp1[i, 14] <- sum(dssp$acc[pos], dssp$acc[pos+1], dssp$acc[pos+2], dssp$acc[pos+3], dssp$acc[pos+4],dssp$acc[pos+5]) ## sum of solvent accesibility
+        str <- ''
+        for (j in 0:5 ){
+          if(dssp$sse[[pos+j]]==" "){
+            str <- paste(str, "L", collapse  = '')
+          } else {str <- paste(str, dssp$sse[[pos+j]], collapse  = '') }
+        }## secondary structure
+#str <- paste(dssp$sse[[pos]],dssp$sse[[pos+1]], dssp$sse[[pos+2]], dssp$sse[[pos+3]], dssp$sse[[pos+4]], dssp$sse[[pos+5]], collapse ='') 
+        exp1[i,15] <- str
+        exp1[i,16] <- pos
+        rm(pdb, aa.seq,str, dssp, atom, res.name)
+        break
+      }
+     }
+  }, error=function(e){}
+ )
+}
+
+
+
+colnames(exp1) <- c("gi", "rname", "Freq",  "gene",  "sequence", "RPR",  "max", "Index",  "cleavage.site", "Entry", "Cross.reference..PDB.", "PDB_pick",  "acc", "acc_sum", "2nd","pos"  )
+
+write.csv(exp1, "casp3_str_analysis.csv")
+```
+
+
+```{r}
+selection <- read.csv("/Users/jie/Box Sync/Wells Lab/projects/TPM substrate identification/NGS/10AA-Set9_NGS/casp3/casp3_str_analysis.csv", stringsAsFactors = F)
+
+merops <- read.csv("casp3_merops_dssp.csv", stringsAsFactors = F)
+selection <- selection[!is.na(selection$acc), ]
+
+
+m <- merops[, c("acc", "acc_sum")]
+
+m$group <- "MEROPS"
+m <- m[!is.na(m$acc),]
+
+
+for (i in 1: nrow(m)){
+  a<- strsplit(m$acc[i], split=" ") %>% unlist()
+  m$p1[i] <- a[4]
+}
+
+p <- selection[, c("acc", "acc_sum")]
+p$group <- "SPD-NGS"
+
+
+
+for (i in 1: nrow(p)){
+  a<- strsplit(p$acc[i], split=" ") %>% unlist()
+  p$p1[i] <- a[4]
+}
+
+p <- p[!duplicated(p$acc),]
+
+x <- rbind(m, p)
+x$p1 <- as.numeric(x$p1)
+x$acc_sum <- as.numeric(x$acc_sum)
+x <- x[!is.na(x$p1),]
+
+# ggplot(x, aes(x=p1, color=group)) + 
+#   geom_histogram(binwidth=5)
+
+write.csv(x, "acc_summary.csv")
+
+x.m <- melt(x, measure.vars = c("p4", "p3", "p2", "p1", "p1.", "p2."))
+x.m$value <- as.numeric(x.m$value)
+
+a <- rbind(p, m)
+a$acc_sum <- as.numeric(a$acc_sum)
+a$p1 <- as.numeric(a$p1)
+
+ggplot(x, aes(x=group, y=p1 , fill=group)) + 
+  geom_violin()+
+  # geom_dotplot(binaxis='y', stackdir='center',size=.1,
+  #                position=position_dodge(1))+
+  scale_fill_brewer(palette="RdPu", direction = -1) + 
+  
+  # geom_dotplot(binaxis='y', stackdir='center',
+  #                position=position_dodge(1), size=.5)+
+  geom_boxplot(width=0.2,position=position_dodge(1))+
+  theme_minimal()+
+  labs(title="", y="Solvent accessibility\n", x = "\n")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 16),
+        axis.text=element_text(size=17, face="bold"),         
+        axis.title=element_text(size=20,face="bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1))+
+  scale_y_continuous(breaks=seq(0,1000,50))+
+  scale_x_discrete(labels=c("MEROPS", "SPD-NGS"))+
+  coord_fixed(ratio = .02)
+
+ggsave("violin_2nd_str_acc_p1.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+
+ggplot(x.m, aes(x=variable, y=as.numeric(value), fill=group)) + 
+  geom_violin(width=1.05)+
+  scale_fill_brewer(palette="Blues") + 
+  geom_boxplot( position=position_dodge(1), width=.05)+
+  theme_minimal()+
+  labs(title="Scoring Distribution PWM\n", y="Scores\n", x = "\nRounds")+
+  theme(legend.title  = element_text(size=15, face="bold", hjust = 0.5),
+        legend.text = element_text(size=15, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 16),
+        axis.text=element_text(size=18, face="bold"),         
+        axis.title=element_text(size=20,face="bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1))+
+  scale_y_continuous(breaks=seq(0,800,50))+
+  scale_x_discrete(labels=c("P4","P3","P2", "P1", "P1'", "P2'"))
+
+ggsave("2nd_violin_1.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+```
+
+
+
+secondary structure of the cleavage site
+```{r}
+
+selection <- read.csv("/Users/jie/Box Sync/Wells Lab/projects/TPM substrate identification/NGS/10AA-Set9_NGS/casp3/casp3_str_analysis.csv", stringsAsFactors = F)
+merops <- read.csv("casp3_merops_dssp.csv", stringsAsFactors = F)
+selection <- selection[!is.na(selection$acc), ]
+
+
+
+for (i in 1: nrow(selection)){
+  
+  tryCatch({
+  
+    x <- selection$sse[i]
+    y <- strsplit(x, split=" ")
+    z <- ''
+  for (j in 2:7){
+    if (y[[1]][j]=="G"| y[[1]][j]=="H"| y[[1]][j]=="I"){
+      z <-  paste(z, "H", collapse  = ' ')
+    } else if( y[[1]][j]=="B" | y[[1]][j]=="E"){
+      z <-  paste(z, "S", collapse  = ' ')
+    } else{
+      z <-   paste(z, "C", collapse  = ' ')
+    }
+  }
+    selection[i,25] <- z  
+    
+  }, error=function(e){
+   })
+}
+
+
+sec_str1<-c("H", "E", "C")
+calculation1<- matrix(nrow=6, ncol=3) %>%as.data.frame
+colnames(calculation1)<-sec_str1
+# summarized how many each AA in each position
+for (i in 1:6) {
+  temp<-substr(selection$V25, i*2,i*2)
+  uniqueaa<- temp %>%  unique() %>%data.frame(stringsAsFactors = F)
+  colnames(uniqueaa) <- "uniqueaa"
+  result<-apply(uniqueaa,1,function(x) str_count(temp, x["uniqueaa"]))
+  colnames(result) <- uniqueaa$uniqueaa
+  result<-result[, sec_str1]
+  result[is.na(result)] <- 0
+  for (j in 1:3) {
+    calculation1[i,j]<-sum(result[,j])
+  }
+}
+
+calculation1$total<-sum(calculation1[, 1:3])/6
+calculation1_percentage<- calculation1/calculation1$total[1]*100
+
+
+write.csv(calculation1_percentage, "calculation_2nd_str_protein.csv")
+
+
+perc1 <- calculation1_percentage[, 1:3] %>%t()%>% as.data.frame()
+perc1$str <- rownames(perc1)
+colnames(perc1) <- c("P4", "P3", "P2", "P1", "P1'", "P2'")
+
+perc1.m <- melt(perc1)
+
+colnames(perc1.m)[1] <- "AA"
+
+perc1.m$AA <- factor(perc1.m$AA, levels = c( "H",  "E","C"))
+
+ggplot(perc1.m,aes(x=variable, y=value, fill=AA))+
+  geom_bar(stat="identity", color="black",position=position_stack(), width = .4) +
+  scale_fill_brewer(direction = -1, palette="Blues")+
+  theme_minimal()+
+  theme(axis.text.x = element_text( hjust = 1))+
+  labs(title="2nd_structure \n", x="", y = "Percentage (%) \n")+
+  theme(legend.title  = element_text(size=12, face="bold", hjust = 0.5),
+        legend.text = element_text(size=12, face="bold"),     
+        plot.title= element_text(hjust = 0.5, face ="bold", size = 14),
+        axis.text=element_text(size=18, face="bold", hjust = 0.5),         
+        axis.title=element_text(size=23,face="bold"))+
+  scale_y_continuous(breaks=seq(0,100,10))+
+  guides(fill=guide_legend(title="2nd Structure"))+
+  coord_fixed(ratio=.05)#+
+
+ggsave("2nr_str.tiff", plot = last_plot(), device = "tiff", path = NULL,
+       scale = 1, width = NA, height = NA, units = c("in", "cm", "mm"),
+       dpi = 600, limitsize = TRUE)
+
+```
+
+
